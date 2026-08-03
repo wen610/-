@@ -16,7 +16,7 @@ const Store = {
     else { this.data = this.seed(); this.save(); }
     return this.data;
   },
-  save() { safeStore.set(STORE_KEY, JSON.stringify(this.data)); },
+  save() { safeStore.set(STORE_KEY, JSON.stringify(this.data)); setTimeout(cloudSync, 0); },
   reset() { this.data = this.seed(); this.save(); },
 
   seed() {
@@ -160,3 +160,45 @@ function addDays(dateStr, n) { const [y, m, d] = dateStr.split('-').map(Number);
 function weekdayCN(n) { return ['一', '二', '三', '四', '五', '六', '日'][n - 1]; }
 function dowJS(n) { return n === 7 ? 0 : n; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+/* ===== 云同步：把核心数据存到 GitHub 仓库的 data.json（方案 A：跨设备同步） ===== */
+const Cloud = {
+  KEY: 'hanrui_cloud',
+  cfg: { enabled: false, token: '', repo: 'wen610/-', file: 'data.json', sha: '' },
+  loadCfg() { try { const r = safeStore.get(this.KEY); if (r) Object.assign(this.cfg, JSON.parse(r)); } catch (e) {} return this.cfg; },
+  saveCfg() { safeStore.set(this.KEY, JSON.stringify(this.cfg)); },
+  _api(path, opts) {
+    const h = { 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' };
+    if (this.cfg.token) h['Authorization'] = 'token ' + this.cfg.token;
+    return fetch('https://api.github.com' + path, Object.assign({ headers: h }, opts));
+  },
+  async pull() {
+    const res = await this._api('/repos/' + this.cfg.repo + '/contents/' + this.cfg.file);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('拉取失败(' + res.status + ')');
+    const j = await res.json();
+    this.cfg.sha = j.sha; this.saveCfg();
+    try { return JSON.parse(decodeURIComponent(escape(atob(j.content.replace(/\s/g, ''))))); }
+    catch (e) { return null; }
+  },
+  async push(data) {
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+    const body = { message: 'sync ' + new Date().toISOString(), content };
+    if (this.cfg.sha) body.sha = this.cfg.sha;
+    const res = await this._api('/repos/' + this.cfg.repo + '/contents/' + this.cfg.file, { method: 'PUT', body: JSON.stringify(body) });
+    if (!res.ok) throw new Error('推送失败(' + res.status + ')');
+    const j = await res.json();
+    this.cfg.sha = j.content.sha; this.saveCfg();
+  }
+};
+
+let _cloudTimer = null;
+function cloudSync() {
+  if (!Cloud.cfg.enabled || !Cloud.cfg.token) return;
+  clearTimeout(_cloudTimer);
+  _cloudTimer = setTimeout(() => {
+    Cloud.push(Store.data)
+      .then(() => toast && toast('已同步到云端 ☁️'))
+      .catch(e => console.warn('云同步失败:', e));
+  }, 1200);
+}

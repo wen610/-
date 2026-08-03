@@ -738,6 +738,17 @@ function renderSettings() {
         ⑥ <b>数据看板</b>：行程完成率、打卡频次、累计刷题、连续天数，全部绿色图表 + 每周复盘。<br>
         ⑦ <b>个性化设置</b>：自定义昵称、签名、天气与护眼模式，左上角可换头像。
       </div>
+    </div>
+    <div class="card set-card" style="margin-top:20px">
+      <h3 style="margin:0 0 8px;color:var(--green-deep)">☁️ 云同步（跨设备共享同一份数据）</h3>
+      <div class="set-hint" style="margin-bottom:8px">开启后，数据保存到你的 GitHub 仓库。手机和电脑填<b>同一个 Token</b> 即可互通。文件（信息存储）仍仅存本机。</div>
+      <div class="set-row"><label>GitHub Token</label><input type="password" id="c-token" value="${esc(Cloud.cfg.token)}" placeholder="ghp_xxxx（需 repo 权限）"></div>
+      <div class="set-row"><label>仓库</label><input type="text" id="c-repo" value="${esc(Cloud.cfg.repo)}"><span class="set-hint">格式 owner/repo</span></div>
+      <div class="set-row"><label>启用同步</label><div class="switch ${Cloud.cfg.enabled?'on':''}" id="c-enable"></div><span class="set-hint" id="c-status">${Cloud.cfg.enabled?'已启用':'未启用'}</span></div>
+      <div class="form-actions">
+        <button class="btn ghost" data-action="cloud-pull">从云端拉取</button>
+        <button class="btn primary" data-action="cloud-push">立即同步</button>
+      </div>
     </div>`;
   $('#s-dark').addEventListener('click', () => {
     S.settings.dark = !S.settings.dark; document.documentElement.dataset.theme = S.settings.dark ? 'dark' : 'light';
@@ -746,6 +757,20 @@ function renderSettings() {
   $('#s-remind').addEventListener('click', () => {
     S.settings.reminders = S.settings.reminders === false ? true : false;
     persist(); renderSettings();
+  });
+  const cToken = $('#c-token'), cRepo = $('#c-repo'), cEnable = $('#c-enable');
+  if (cToken) cToken.addEventListener('input', e => { Cloud.cfg.token = e.target.value.trim(); Cloud.saveCfg(); });
+  if (cRepo) cRepo.addEventListener('input', e => { Cloud.cfg.repo = e.target.value.trim(); Cloud.saveCfg(); });
+  if (cEnable) cEnable.addEventListener('click', async () => {
+    Cloud.cfg.enabled = !Cloud.cfg.enabled; Cloud.saveCfg(); renderSettings();
+    if (Cloud.cfg.enabled) {
+      if (!Cloud.cfg.token) { toast('请先填写 GitHub Token 再启用'); Cloud.cfg.enabled = false; Cloud.saveCfg(); renderSettings(); return; }
+      try {
+        const d = await Cloud.pull();
+        if (d) { Store.data = d; S = Store.data; } else { await Cloud.push(Store.data); }
+        persist(); toast('云同步已开启并同步 ☁️');
+      } catch (e) { toast('云同步失败：' + e.message); }
+    }
   });
 }
 function saveSettings() {
@@ -839,6 +864,8 @@ document.addEventListener('click', async e => {
     case 'view-img': { const src = el.dataset.src || ''; if (!src || (!src.startsWith('data:') && !src.startsWith('http'))) { toast('图片预览不可用 🌿'); break; } $('#imgBig').src = src; $('#imgBig').style.display = ''; $('#imgMask').hidden = false; break; }
     case 'close-modal': closeModal(); break;
     case 'save-settings': saveSettings(); break;
+    case 'cloud-push': { if (!Cloud.cfg.token) { toast('请先在设置页填写 GitHub Token'); break; } Cloud.push(Store.data).then(() => toast('已同步到云端 ☁️')).catch(err => toast('推送失败：' + err.message)); break; }
+    case 'cloud-pull': { if (!Cloud.cfg.token) { toast('请先在设置页填写 GitHub Token'); break; } Cloud.pull().then(d => { if (d) { Store.data = d; S = Store.data; persist(); toast('已从云端拉取 ☁️'); } else toast('云端暂无数据'); }).catch(err => toast('拉取失败：' + err.message)); break; }
     case 'reset-data': if (confirm('将清空全部数据并恢复示例，确定？')) { Store.reset(); S = Store.load(); await FileStore.init(); await FileStore.ensureDefaultGroup(); updateProfile(); goPage(state.page); toast('已重置'); } break;
     case 'close-remind': closeRemind(); break;
     case 'open-upload': openUploadModal(); break;
@@ -871,8 +898,16 @@ document.addEventListener('keydown', e => {
    启动
    =================================================================== */
 (async function boot() {
+  Cloud.loadCfg();
   await FileStore.init();
   await FileStore.ensureDefaultGroup();
+  if (Cloud.cfg.enabled && Cloud.cfg.token) {
+    try {
+      const d = await Cloud.pull();
+      if (d) { Store.data = d; S = Store.data; toast('已从云端同步 ☁️'); }
+      else { await Cloud.push(Store.data); }
+    } catch (e) { console.warn('启动云同步失败:', e); }
+  }
   updateProfile();
   document.documentElement.dataset.theme = S.settings.dark ? 'dark' : 'light';
   goPage('home');
